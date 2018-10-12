@@ -1,4 +1,4 @@
-local libURL = "https://raw.githubusercontent.com/idolord/dr/master/lib/utilities.lua"
+local libURL = "https://raw.githubusercontent.com/idolord/dr/master/lib/f.lua"
 local startupURL = "https://raw.githubusercontent.com/idolord/dr/master/dr.lua"
 local lib, startup
 local libFile, startupFile
