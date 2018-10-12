@@ -19,18 +19,6 @@ function periphSearchmultiples(type)
           retarray[#retarray+1] = i
        end
     end
-    if #flux_gates < 2 then
-        print("Not enough flux gates connected; please connect inflow and outflow flux gates with Adapter blocks.")
-        return null
-      end
-      flux_in = component.proxy(flux_gates[1])
-      flux_out = component.proxy(flux_gates[2])
-      if not flux_in or not flux_out then
-        print("Not enough flux gates connected; please connect inflow and outflow flux gates with Adapter blocks.")
-        return null
-      end
-      if flux_in and flux_out then
-        return retarray
 end
 
 -- formatting
