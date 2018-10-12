@@ -11,6 +11,16 @@ function periphSearch(type)
     return null
 end
 
+function periphSearchmultiples(type)
+    local retarray = {}
+    local names = peripheral.getNames()
+    for i, name in pairs(names) do
+       if peripheral.getType(name) == type then
+          retarray[#retarray+1] = i
+       end
+    end
+end
+
 -- formatting
 
 function format_int(number)
