@@ -1,329 +1,482 @@
---reactor variables
-local targetStrength = 50
-local maxTemperature = 8000
-local safeTemperature = 3000
-local lowestFieldPercent = 15
-
-local activateOnCharged = 1
-
--- please leave things untouched from here on
 os.loadAPI("lib/utilities")
+local component = utilities.periphSearch("draconic_reactor")
+local term = utilities.periphSearch("monitor")
 
-local version = "0.50"
--- toggleable via the monitor, use our algorithm to achieve our target field strength or let the user tweak it
-local autoInputGate = 1
-local curInputGate = 222000
+ -- Safety Checks
 
--- monitor
-local mon, monitor, monX, monY
-
--- peripherals
-local reactor
-local fluxgatein
-local fluxgateou
-local fluxgates
-
--- reactor information
-local ri
-
--- last performed action
-local action = "None since reboot"
-local emergencyCharge = false
-local emergencyTemp = false
-
-monitor = utilities.periphSearch("monitor")
-fluxgates = utilities.periphSearchmultiples("flux_gate")
-fluxgatein = peripheral.wrap(fluxgates[1])
-fluxgateou = peripheral.wrap(fluxgates[2])
-reactor = peripheral.wrap(reactorSide)
-
-if monitor == null then
-    error("No valid monitor was found")
-    os.exit()
+if not component.isAvailable("draconic_reactor") then
+  print("Reactor not connected. Please connect computer to reactor with an Adapter block.")
+  os.exit()
+end
+reactor = component.draconic_reactor
+local flux_gates = {}
+for x,y in pairs(component.list("flux_gate")) do
+  flux_gates[#flux_gates+1] = x
+end
+if #flux_gates < 2 then
+  print("Not enough flux gates connected; please connect inflow and outflow flux gates with Adapter blocks.")
+  os.exit()
+end
+flux_in = component.proxy(flux_gates[1])
+flux_out = component.proxy(flux_gates[2])
+if not flux_in or not flux_out then
+  print("Not enough flux gates connected; please connect inflow and outflow flux gates with Adapter blocks.")
+  os.exit()
 end
 
-if fluxgates == null then
-	error("No valid fluxgate was found at all")
-    os.exit()
+ -- Functions
+
+function exit_msg(msg)
+  term.clear()
+  print(msg)
+  os.exit()
 end
 
-if fluxgatein == null then
-    error("Missing IN fluxgate")
-    os.exit()
+function modify_temp(offset)
+  local new_temp = ideal_temp + offset
+  if new_temp > 8000 then
+    new_temp = 8000
+  elseif new_temp < 2500 then
+    new_temp = 2500
+  end
+  ideal_temp = new_temp
 end
 
-if fluxgatein == null then
-    error("Missing OUT fluxgate")
-    os.exit()
+function modify_field(offset)
+  local new_strength = ideal_strength + offset
+  if new_strength > 90 then
+    new_strength = 90
+  elseif new_strength < 1 then
+    new_strength = 1
+  end
+  ideal_strength = new_strength
 end
 
-if reactor == null then
-	error("No valid reactor was found")
-    os.exit()
-end
+ -- Buttons
 
-if inputfluxgate == null then
-	error("No valid flux gate was found")
-    os.exit()
-end
+local adj_button_width = 19
+local temp_adjust_x_offset = 68
+local temp_adjust_y_offset = 2
+local field_adjust_x_offset = temp_adjust_x_offset + adj_button_width + 2
+local field_adjust_y_offset = 2
 
-monX, monY = monitor.getSize()
-mon = {}
-mon.monitor,mon.X, mon.Y = monitor, monX, monY
-
---write settings to config file
-function save_config()
-  sw = fs.open("config.txt", "w")   
-  sw.writeLine(version)
-  sw.writeLine(autoInputGate)
-  sw.writeLine(curInputGate)
-  sw.close()
-end
-
---read settings from file
-function load_config()
-  sr = fs.open("config.txt", "r")
-  version = sr.readLine()
-  autoInputGate = tonumber(sr.readLine())
-  curInputGate = tonumber(sr.readLine())
-  sr.close()
-end
-
-
--- 1st time? save our settings, if not, load our settings
-if fs.exists("config.txt") == false then
-  save_config()
-else
-  load_config()
-end
-
-function buttons()
-
-  while true do
-    -- button handler
-    event, side, xPos, yPos = os.pullEvent("monitor_touch")
-
-    -- output gate controls
-    -- 2-4 = -1000, 6-9 = -10000, 10-12,8 = -100000
-    -- 17-19 = +1000, 21-23 = +10000, 25-27 = +100000
-    if yPos == 8 then
-      local cFlow = fluxgate.getSignalLowFlow()
-      if xPos >= 2 and xPos <= 4 then
-        cFlow = cFlow-1000
-      elseif xPos >= 6 and xPos <= 9 then
-        cFlow = cFlow-10000
-      elseif xPos >= 10 and xPos <= 12 then
-        cFlow = cFlow-100000
-      elseif xPos >= 17 and xPos <= 19 then
-        cFlow = cFlow+100000
-      elseif xPos >= 21 and xPos <= 23 then
-        cFlow = cFlow+10000
-      elseif xPos >= 25 and xPos <= 27 then
-        cFlow = cFlow+1000
+local buttons = {
+  start={
+    x=42,
+    y=2,
+    width=24,
+    height=7,
+    text="Start",
+    action=function() 
+      if safe then
+        state = "Charging"
+        reactor.chargeReactor()
+      elseif shutting_down then
+        state = "Active"
+        reactor.activateReactor()
       end
-      fluxgate.setSignalLowFlow(cFlow)
-    end
+    end,
+    condition=function() return safe or shutting_down end
+  },
+  shutdown={
+    x=42,
+    y=12,
+    width=24,
+    height=7,
+    text="Shutdown",
+    action=function()
+      state = "Manual Shutdown"
+      reactor.stopReactor()
+    end,
+    condition=function() return running end
+  },
+  switch_gates={
+    x=2,
+    y=20,
+    width=24,
+    height=3,
+    text="Swap flux gates",
+    action=function()
+      local old_addr = flux_in.address
+      flux_in = component.proxy(flux_out.address)
+      flux_out = component.proxy(old_addr)
+    end,
+    condition=function() return safe end
+  },
+  exit={
+    x=42,
+    y=12,
+    width=24,
+    height=7,
+    text="Exit",
+    action=function()
+      event_loop = false
+    end,
+    condition=function() return safe end
+  },
+  temp_up_thousand={
+    x=temp_adjust_x_offset,
+    y=temp_adjust_y_offset,
+    width=adj_button_width,
+    height=1,
+    text="+ 1000",
+    action=function() modify_temp(1000) end
+  },
+  temp_up_hundred={
+    x=temp_adjust_x_offset,
+    y=temp_adjust_y_offset+2,
+    width=adj_button_width,
+    height=1,
+    text="+ 100",
+    action=function() modify_temp(100) end
+  },
+  temp_up_ten={
+    x=temp_adjust_x_offset,
+    y=temp_adjust_y_offset+4,
+    width=adj_button_width,
+    height=1,
+    text="+ 10",
+    action=function() modify_temp(10) end
+  },
+  temp_up_one={
+    x=temp_adjust_x_offset,
+    y=temp_adjust_y_offset+6,
+    width=adj_button_width,
+    height=1,
+    text="+ 1",
+    action=function() modify_temp(1) end
+  },
+  temp_down_thousand={
+    x=temp_adjust_x_offset,
+    y=temp_adjust_y_offset+16,
+    width=adj_button_width,
+    height=1,
+    text="- 1000",
+    action=function() modify_temp(-1000) end
+  },
+  temp_down_hundred={
+    x=temp_adjust_x_offset,
+    y=temp_adjust_y_offset+14,
+    width=adj_button_width,
+    height=1,
+    text=" - 100",
+    action=function() modify_temp(-100) end
+  },
+  temp_down_ten={
+    x=temp_adjust_x_offset,
+    y=temp_adjust_y_offset+12,
+    width=adj_button_width,
+    height=1,
+    text="- 10",
+    action=function() modify_temp(-10) end
+  },
+  temp_down_one={
+    x=temp_adjust_x_offset,
+    y=temp_adjust_y_offset+10,
+    width=adj_button_width,
+    height=1,
+    text="- 1",
+    action=function() modify_temp(-1) end
+  },
+  field_up_ten={
+    x=field_adjust_x_offset,
+    y=field_adjust_y_offset+4,
+    width=adj_button_width,
+    height=1,
+    text="+ 10",
+    action=function() modify_field(10) end
+  },
+  field_up_one={
+    x=field_adjust_x_offset,
+    y=field_adjust_y_offset+6,
+    width=adj_button_width,
+    height=1,
+    text="+ 1",
+    action=function() modify_field(1) end
+  },
+  field_down_ten={
+    x=field_adjust_x_offset,
+    y=field_adjust_y_offset+12,
+    width=adj_button_width,
+    height=1,
+    text="- 10",
+    action=function() modify_field(-10) end
+  },
+  field_down_one={
+    x=field_adjust_x_offset,
+    y=field_adjust_y_offset+10,
+    width=adj_button_width,
+    height=1,
+    text="- 1",
+    action=function() modify_field(-1) end
+  }
+}
 
-    -- input gate controls
-    -- 2-4 = -1000, 6-9 = -10000, 10-12,8 = -100000
-    -- 17-19 = +1000, 21-23 = +10000, 25-27 = +100000
-    if yPos == 10 and autoInputGate == 0 and xPos ~= 14 and xPos ~= 15 then
-      if xPos >= 2 and xPos <= 4 then
-        curInputGate = curInputGate-1000
-      elseif xPos >= 6 and xPos <= 9 then
-        curInputGate = curInputGate-10000
-      elseif xPos >= 10 and xPos <= 12 then
-        curInputGate = curInputGate-100000
-      elseif xPos >= 17 and xPos <= 19 then
-        curInputGate = curInputGate+100000
-      elseif xPos >= 21 and xPos <= 23 then
-        curInputGate = curInputGate+10000
-      elseif xPos >= 25 and xPos <= 27 then
-        curInputGate = curInputGate+1000
-      end
-      inputfluxgate.setSignalLowFlow(curInputGate)
-      save_config()
-    end
+ -- main code
 
-    -- input gate toggle
-    if yPos == 10 and ( xPos == 14 or xPos == 15) then
-      if autoInputGate == 1 then
-        autoInputGate = 0
+flux_in.setFlowOverride(0)
+flux_out.setFlowOverride(0)
+flux_in.setOverrideEnabled(true)
+flux_out.setOverrideEnabled(true)
+
+local condition = reactor.getReactorInfo()
+if not condition then
+  print("Reactor not initialized, please ensure the stabilizers are properly laid out.")
+  os.exit()
+end
+
+ideal_strength = 50
+
+ideal_temp = 8000
+cutoff_temp = 8100
+
+ -- tweakable pid gains
+
+inflow_P_gain = 1
+inflow_I_gain = 0.04
+inflow_D_gain = 0.1
+
+outflow_P_gain = 500
+outflow_I_gain = 0.5
+outflow_II_gain = 0.0000003
+outflow_D_gain = 60000
+
+ -- initialize main loop
+
+inflow_I_sum = 0
+inflow_D_last = 0
+
+outflow_I_sum = 0
+outflow_II_sum = 0
+outflow_D_last = 0
+
+state = "Standby"
+shutting_down = false
+
+if condition.temperature > 25 then
+  state = "Cooling"
+end
+if condition.temperature > 2000 then
+  state = "Active"
+end
+
+ -- Possible states:
+  --Standby
+  --Charging
+  --Active
+  --Manual Shutdown
+  --Emergency Shutdown
+  --Cooling
+
+event_loop = true
+while event_loop do
+
+  if not component.isAvailable("draconic_reactor") then
+    exit_msg("Reactor disconnected, exiting")
+  end
+
+  if not component.isAvailable("flux_gate") then
+    exit_msg("Flux gates disconnected, exiting")
+  end
+
+  local info = reactor.getReactorInfo()
+
+  local inflow = 0
+  local outflow = 0
+
+  shutting_down = state == "Manual Shutdown" or state == "Emergency Shutdown"
+  running = state == "Charging" or state == "Active"
+  safe = state == "Standby" or state == "Cooling"
+
+  if state == "Charging" then
+    inflow = 200000
+
+    if info.temperature > 2000 then
+      reactor.activateReactor()
+      state = "Active"
+    end
+  elseif state == "Cooling" then
+    if info.temperature < 25 then
+      state = "Standby"
+    end
+    inflow = 10
+    outflow = 20
+  elseif state == "Standby" then
+    inflow = 10
+    outflow = 20
+  else
+    -- adjust inflow rate based on field strength
+   
+    local field_error = (info.maxFieldStrength * (ideal_strength / 100)) - info.fieldStrength
+    local proportional_field_error = field_error * inflow_P_gain
+    inflow_I_sum = inflow_I_sum + field_error
+    local integral_field_error = inflow_I_sum * inflow_I_gain
+    local derivative_field_error = (field_error - inflow_D_last) * inflow_D_gain
+    inflow_D_last = field_error
+    local inflow_correction = proportional_field_error + integral_field_error + derivative_field_error
+    if inflow_correction < 0 then
+      inflow_I_sum = inflow_I_sum - field_error
+    end
+    inflow = inflow_correction
+
+    if not shutting_down then
+
+      -- adjust outflow rate based on core temperature
+
+      local temp_error = ideal_temp - info.temperature
+      local proportional_temp_error = temp_error * outflow_P_gain
+      outflow_I_sum = outflow_I_sum + temp_error
+      local integral_temp_error = outflow_I_sum * outflow_I_gain
+      if math.abs(temp_error) < 100 then
+        outflow_II_sum = outflow_II_sum + integral_temp_error
       else
-        autoInputGate = 1
+        outflow_II_sum = 0
       end
-      save_config()
+      local second_integral_temp_error = outflow_II_sum * outflow_II_gain
+      local derivative_temp_error = (temp_error - outflow_D_last) * outflow_D_gain
+      outflow_D_last = temp_error
+      local outflow_correction = proportional_temp_error + integral_temp_error + second_integral_temp_error + derivative_temp_error
+      if outflow_correction < 0 then
+        outflow_I_sum = outflow_I_sum - temp_error
+      end
+      outflow = outflow_correction
+
+      -- cut off reactor in case of emergency
+
+      if info.temperature > cutoff_temp then
+        print("Reactor temperature greater than", cutoff_temp, ", failsafe activated, shutting down")
+        outflow = 0
+        state = "Emergency Shutdown"
+        reactor.stopReactor()
+      end
+    else
+      if info.temperature < 2000 then
+        state = "Cooling"
+      end
+    end
+  end
+
+  if state ~= "Active" and not shutting_down then
+    inflow_I_sum = 0
+    inflow_D_last = 0
+    outflow_I_sum = 0
+    outflow_II_sum = 0
+    outflow_D_last = 0
+  end
+
+  if inflow < 0 then
+    inflow = 0
+  end
+  if outflow < 0 then
+    outflow = 0
+  end
+
+  inflow = math.floor(inflow)
+  outflow = math.floor(outflow)
+
+  flux_in.setFlowOverride(inflow)
+  flux_out.setFlowOverride(outflow)
+
+  -- Draw screen
+
+  if term.isAvailable() then
+
+    -- Draw Values
+
+    local left_margin = 2
+    local spacing = 2
+
+    local values = {
+      "Status:              " .. state,
+      "Field Strength:      " .. ((info.fieldStrength / info.maxFieldStrength) * 100) .. "%",
+      "Energy Saturation:   " .. ((info.energySaturation / info.maxEnergySaturation) * 100) .. "%",
+      "Fuel Concentration:  " .. ((1 - info.fuelConversion / info.maxFuelConversion) * 100) .. "%",
+      "Temperature:         " .. info.temperature .. " F",
+      "Reactor Efficiency:  " .. info.fuelConversionRate .. " nb/t",
+      "Energy Inflow Rate:  " .. inflow .. " RF/t",
+      "Energy Outflow Rate: " .. outflow .. " RF/t"
+    }
+
+    if safe then
+      values[#values+1] = "Click if flux gates need to be swapped"
     end
 
+    term.clear()
+    
+    for i, v in ipairs(values) do
+      term.setCursor(left_margin, i * spacing)
+      term.write(v)
+    end
+
+    -- Draw button values
+
+    term.setCursor(temp_adjust_x_offset, temp_adjust_y_offset+8)
+    term.write("Target Temp: " .. ideal_temp .. " F")
+    term.setCursor(field_adjust_x_offset, field_adjust_y_offset+8)
+    term.write("Target Strength: " .. ideal_strength .. "%")
+
+    -- Draw Buttons
+
+    gpu.setForeground(0x000000)
+
+    for bname, button in pairs(buttons) do
+      if button.depressed then
+
+        button.depressed = button.depressed - 1
+        if button.depressed == 0 then
+          button.depressed = nil
+        end
+      end
+      if button.condition == nil or button.condition() then
+        local center_color = 0xAAAAAA
+        local highlight_color = 0xCCCCCC
+        local lowlight_color = 0x808080
+        if button.depressed then
+          center_color = 0x999999
+          highlight_color = 0x707070
+          lowlight_color = 0xBBBBBB
+        end
+        gpu.setBackground(center_color)
+        gpu.fill(button.x, button.y, button.width, button.height, " ")
+        if button.width > 1 and button.height > 1 then
+          gpu.setBackground(lowlight_color)
+          gpu.fill(button.x+1, button.y+button.height-1, button.width-1, 1, " ")
+          gpu.fill(button.x+button.width-1, button.y, 1, button.height, " ")
+          gpu.setBackground(highlight_color)
+          gpu.fill(button.x, button.y, 1, button.height, " ")
+          gpu.fill(button.x, button.y, button.width, 1, " ")
+        end
+        gpu.setBackground(center_color)
+        term.setCursor(button.x + math.floor(button.width / 2 - #button.text / 2), button.y + math.floor(button.height / 2))
+        term.write(button.text)
+      end
+    end
+
+    gpu.setBackground(0x000000)
+    gpu.setForeground(0xFFFFFF)
+  end  
+
+  -- Wait for next tick, or manual shutdown
+
+  local event, id, op1, op2 = event.pull(0.05)
+  if event == "interrupted" then
+    if safe then
+      break
+    end
+  elseif event == "touch" then
+    
+    -- Handle Button Presses
+
+    local x = op1
+    local y = op2
+
+    for bname, button in pairs(buttons) do
+      if (button.condition == nil or button.condition()) and x >= button.x and x <= button.x + button.width and y >= button.y and y <= button.y + button.height then
+        button.action()
+        button.depressed = 3
+      end
+    end
   end
 end
 
-function drawButtons(y)
-
-  -- 2-4 = -1000, 6-9 = -10000, 10-12,8 = -100000
-  -- 17-19 = +1000, 21-23 = +10000, 25-27 = +100000
-
-  f.draw_text(mon, 2, y, " < ", colors.white, colors.gray)
-  f.draw_text(mon, 6, y, " <<", colors.white, colors.gray)
-  f.draw_text(mon, 10, y, "<<<", colors.white, colors.gray)
-
-  f.draw_text(mon, 17, y, ">>>", colors.white, colors.gray)
-  f.draw_text(mon, 21, y, ">> ", colors.white, colors.gray)
-  f.draw_text(mon, 25, y, " > ", colors.white, colors.gray)
-end
-
-
-
-function update()
-  while true do 
-
-    f.clear(mon)
-
-    ri = reactor.getReactorInfo()
-
-    -- print out all the infos from .getReactorInfo() to term
-
-    if ri == nil then
-      error("reactor has an invalid setup")
-    end
-
-    for k, v in pairs (ri) do
-      print(k.. ": ".. v)
-    end
-    print("Output Gate: ", fluxgate.getSignalLowFlow())
-    print("Input Gate: ", inputfluxgate.getSignalLowFlow())
-
-    -- monitor output
-
-    local statusColor
-    statusColor = colors.red
-
-    if ri.status == "online" or ri.status == "charged" then
-      statusColor = colors.green
-    elseif ri.status == "offline" then
-      statusColor = colors.gray
-    elseif ri.status == "charging" then
-      statusColor = colors.orange
-    end
-
-    f.draw_text_lr(mon, 2, 2, 1, "Reactor Status", string.upper(ri.status), colors.white, statusColor, colors.black)
-
-    f.draw_text_lr(mon, 2, 4, 1, "Generation", f.format_int(ri.generationRate) .. " rf/t", colors.white, colors.lime, colors.black)
-
-    local tempColor = colors.red
-    if ri.temperature <= 5000 then tempColor = colors.green end
-    if ri.temperature >= 5000 and ri.temperature <= 6500 then tempColor = colors.orange end
-    f.draw_text_lr(mon, 2, 6, 1, "Temperature", f.format_int(ri.temperature) .. "C", colors.white, tempColor, colors.black)
-
-    f.draw_text_lr(mon, 2, 7, 1, "Output Gate", f.format_int(fluxgate.getSignalLowFlow()) .. " rf/t", colors.white, colors.blue, colors.black)
-
-    -- buttons
-    drawButtons(8)
-
-    f.draw_text_lr(mon, 2, 9, 1, "Input Gate", f.format_int(inputfluxgate.getSignalLowFlow()) .. " rf/t", colors.white, colors.blue, colors.black)
-
-    if autoInputGate == 1 then
-      f.draw_text(mon, 14, 10, "AU", colors.white, colors.gray)
-    else
-      f.draw_text(mon, 14, 10, "MA", colors.white, colors.gray)
-      drawButtons(10)
-    end
-
-    local satPercent
-    satPercent = math.ceil(ri.energySaturation / ri.maxEnergySaturation * 10000)*.01
-
-    f.draw_text_lr(mon, 2, 11, 1, "Energy Saturation", satPercent .. "%", colors.white, colors.white, colors.black)
-    f.progress_bar(mon, 2, 12, mon.X-2, satPercent, 100, colors.blue, colors.gray)
-
-    local fieldPercent, fieldColor
-    fieldPercent = math.ceil(ri.fieldStrength / ri.maxFieldStrength * 10000)*.01
-
-    fieldColor = colors.red
-    if fieldPercent >= 50 then fieldColor = colors.green end
-    if fieldPercent < 50 and fieldPercent > 30 then fieldColor = colors.orange end
-
-    if autoInputGate == 1 then 
-      f.draw_text_lr(mon, 2, 14, 1, "Field Strength T:" .. targetStrength, fieldPercent .. "%", colors.white, fieldColor, colors.black)
-    else
-      f.draw_text_lr(mon, 2, 14, 1, "Field Strength", fieldPercent .. "%", colors.white, fieldColor, colors.black)
-    end
-    f.progress_bar(mon, 2, 15, mon.X-2, fieldPercent, 100, fieldColor, colors.gray)
-
-    local fuelPercent, fuelColor
-
-    fuelPercent = 100 - math.ceil(ri.fuelConversion / ri.maxFuelConversion * 10000)*.01
-
-    fuelColor = colors.red
-
-    if fuelPercent >= 70 then fuelColor = colors.green end
-    if fuelPercent < 70 and fuelPercent > 30 then fuelColor = colors.orange end
-
-    f.draw_text_lr(mon, 2, 17, 1, "Fuel ", fuelPercent .. "%", colors.white, fuelColor, colors.black)
-    f.progress_bar(mon, 2, 18, mon.X-2, fuelPercent, 100, fuelColor, colors.gray)
-
-    f.draw_text_lr(mon, 2, 19, 1, "Action ", action, colors.gray, colors.gray, colors.black)
-
-    -- actual reactor interaction
-    --
-    if emergencyCharge == true then
-      reactor.chargeReactor()
-    end
-    
-    -- are we charging? open the floodgates
-    if ri.status == "charging" then
-      inputfluxgate.setSignalLowFlow(900000)
-      emergencyCharge = false
-    end
-
-    -- are we stopping from a shutdown and our temp is better? activate
-    if emergencyTemp == true and ri.status == "stopping" and ri.temperature < safeTemperature then
-      reactor.activateReactor()
-      emergencyTemp = false
-    end
-
-    -- are we charged? lets activate
-    if ri.status == "charged" and activateOnCharged == 1 then
-      reactor.activateReactor()
-    end
-
-    -- are we on? regulate the input fludgate to our target field strength
-    -- or set it to our saved setting since we are on manual
-    if ri.status == "online" then
-      if autoInputGate == 1 then 
-        fluxval = ri.fieldDrainRate / (1 - (targetStrength/100) )
-        print("Target Gate: ".. fluxval)
-        inputfluxgate.setSignalLowFlow(fluxval)
-      else
-        inputfluxgate.setSignalLowFlow(curInputGate)
-      end
-    end
-
-    -- safeguards
-    --
-    
-    -- out of fuel, kill it
-    if fuelPercent <= 10 then
-      reactor.stopReactor()
-      action = "Fuel below 10%, refuel"
-    end
-
-    -- field strength is too dangerous, kill and it try and charge it before it blows
-    if fieldPercent <= lowestFieldPercent and ri.status == "online" then
-      action = "Field Str < " ..lowestFieldPercent.."%"
-      reactor.stopReactor()
-      reactor.chargeReactor()
-      emergencyCharge = true
-    end
-
-    -- temperature too high, kill it and activate it when its cool
-    if ri.temperature > maxTemperature then
-      reactor.stopReactor()
-      action = "Temp > " .. maxTemperature
-      emergencyTemp = true
-    end
-
-    sleep(0.1)
-  end
-end
-
-parallel.waitForAny(buttons, update)
+term.clear()
