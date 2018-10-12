@@ -31,9 +31,10 @@ local action = "None since reboot"
 local emergencyCharge = false
 local emergencyTemp = false
 
-monitor = f.periphSearch("monitor")
-fluxgates = f.periphSearchmultiples("flux_gate")
-fluxgate = peripheral.wrap(fluxgateSide)
+monitor = utilities.periphSearch("monitor")
+fluxgates = utilities.periphSearchmultiples("flux_gate")
+fluxgatein = peripheral.wrap(fluxgates[1])
+fluxgateou = peripheral.wrap(fluxgates[2])
 reactor = peripheral.wrap(reactorSide)
 
 if monitor == null then
@@ -41,8 +42,18 @@ if monitor == null then
     os.exit()
 end
 
-if fluxgate == null then
-	error("No valid fluxgate was found")
+if fluxgates == null then
+	error("No valid fluxgate was found at all")
+    os.exit()
+end
+
+if fluxgatein == null then
+    error("Missing IN fluxgate")
+    os.exit()
+end
+
+if fluxgatein == null then
+    error("Missing OUT fluxgate")
     os.exit()
 end
 
