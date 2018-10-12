@@ -1,6 +1,6 @@
-os.loadAPI("lib/utilities")
-local component = utilities.periphSearch("draconic_reactor")
-local term = utilities.periphSearch("monitor")
+os.loadAPI("lib/f")
+local component = f.periphSearch("draconic_reactor")
+local term = f.periphSearch("monitor")
 
  -- Safety Checks
 
