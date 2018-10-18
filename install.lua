@@ -6,7 +6,7 @@ local rebootScript = "https://raw.githubusercontent.com/idolord/dr/master/reboot
 local lib, startup
 local reactor, startupFile, reactorinfo, rebootSRC
 
-lib = http.get(libURL)
+lib = http.get(reactorURL)
 reactor = lib.readAll()
 
 local file1 = fs.open("reactorCommands", "w")
