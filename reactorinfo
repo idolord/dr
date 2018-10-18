@@ -1,7 +1,7 @@
-r = peripheral.wrap("bottom")
-m = peripheral.wrap("monitor_0")
-fg = peripheral.wrap("flux_gate_0")
-fgout = peripheral.wrap("flux_gate_1")
+r = peripheral.wrap("right")
+m = peripheral.wrap("monitor_1")
+fg = peripheral.wrap("flux_gate_3")
+fgout = peripheral.wrap("flux_gate_2")
 
 term.clear()
 m.clear()
@@ -395,15 +395,16 @@ while true do
   -- Handle Energy Injector for shutdown and charging
   local d = (fieldStrength/maxFieldStrength)
   local e = (sat/maxSat)
+    if ((status == "stopping" and d <= 0.25) or status == "warming_up") then
+    fg.setSignalLowFlow(1000000)
+  elseif (status == "running") then
+    
   if (e < 0.20) then
     prevreqpow = prevreqpow - 1
   end
   if (e > 0.21) then
     prevreqpow = prevreqpow + 1
   end
-    if ((status == "stopping" and d <= 0.25) or status == "warming_up") then
-    fg.setSignalLowFlow(1000000)
-  elseif (status == "running" and d <= 0.21) then
     fg.setSignalLowFlow(fieldPower / (1 - (21/100) ))
     fgout.setSignalLowFlow(prevreqpow)
   else
