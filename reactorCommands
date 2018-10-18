@@ -1,0 +1,39 @@
+r = peripheral.wrap("bottom")
+
+while true do
+  term.clear()
+  term.setCursorPos(1,1)
+  print("Reactor commands:")
+  print("charge, start, shutdown")
+  
+  info = r.getReactorInfo()
+  
+  status = info["status"]
+  a = info["fieldStrength"]
+  b = info["maxFieldStrength"]
+  
+  input = read()
+  
+  if (input == "charge") then
+    r.chargeReactor()
+    term.clear()
+    term.setCursorPos(1,1)
+    print("Charging!")
+    sleep(1.5)
+  elseif (input == "start") then
+    r.activateReactor()
+    term.clear()
+    term.setCursorPos(1,1)
+    print("Activating Idolord's Draconic Reactor.")
+    sleep(2)
+  elseif (input == "shutdown") then
+    r.stopReactor()
+    term.clear()
+    term.setCursorPos(1,1)
+    print("Shutting down")
+    sleep(1.5)
+  else
+    print("Invalid input")
+    sleep(1)
+  end
+end

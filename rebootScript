@@ -1,0 +1,11 @@
+while true do
+  term.clear()
+  term.setCursorPos(1,1)
+  print("Press the button to reboot.")
+  
+  if (redstone.getAnalogInput("left") > 0) then
+    os.reboot()
+  end
+  
+  sleep(0.5)
+end
