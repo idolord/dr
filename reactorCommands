@@ -1,4 +1,4 @@
-r = peripheral.wrap("bottom")
+r = peripheral.wrap("left")
 
 while true do
   term.clear()
